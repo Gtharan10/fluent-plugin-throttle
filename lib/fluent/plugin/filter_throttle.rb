@@ -1,4 +1,3 @@
-# frozen_string_literal: true
 require 'fluent/plugin/filter'
 
 module Fluent::Plugin
@@ -34,6 +33,19 @@ module Fluent::Plugin
       This is the delay between every repetition.
     DESC
     config_param :group_warning_delay_s, :integer, :default => 10
+
+    desc <<~DESC
+    When a group exceeds its bucket limit and the user chooses not to drop it,
+    the flag is added to mark it as “yes” for further processing of that message.
+    DESC
+    config_param :add_field, :string, :default => "throttled"
+
+    desc <<~DESC
+    If a group surpasses its bucket limit and the user opts not to remove the event,
+    then, if this flag is activated at the configuration level,
+    that specific message is modified to include the value of "add_field" and marked as "yes"
+    DESC
+    config_param :pass_through, :bool, :default => false
 
     Group = Struct.new(
       :rate_count,
@@ -85,8 +97,8 @@ module Fluent::Plugin
       now = Time.now
       rate_limit_exceeded = @group_drop_logs ? nil : record # return nil on rate_limit_exceeded to drop the record
       group = extract_group(record)
-      
-      # Ruby hashes are ordered by insertion. 
+
+      # Ruby hashes are ordered by insertion.
       # Deleting and inserting moves the item to the end of the hash (most recently used)
       counter = @counters[group] = @counters.delete(group) || Group.new(0, now, 0, 0, now, nil)
 
@@ -115,6 +127,10 @@ module Fluent::Plugin
             log_rate_back_down(now, group, counter)
           else
             log_rate_limit_exceeded(now, group, counter)
+            if pass_through == true
+              record[add_field] = "yes"
+              return record
+            end
             return rate_limit_exceeded
           end
         end
@@ -126,6 +142,10 @@ module Fluent::Plugin
         # if current time period credit is exhausted, drop the record.
         if counter.bucket_count == -1
           log_rate_limit_exceeded(now, group, counter)
+          if pass_through == true
+            record[add_field] = "yes"
+            return record
+          end
           return rate_limit_exceeded
         end
       end
@@ -136,6 +156,10 @@ module Fluent::Plugin
       if counter.bucket_count > @group_bucket_limit
         log_rate_limit_exceeded(now, group, counter)
         counter.bucket_count = -1
+        if pass_through == true
+          record[add_field] = "yes"
+          return record
+        end
         return rate_limit_exceeded
       end
 
